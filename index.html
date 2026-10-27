@@ -2,16 +2,33 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>Test</title>
+<title>Grid Raycaster</title>
 <style>
   :root { color-scheme: dark; }
   html, body { height: 100%; margin: 0; background: #000; overflow: hidden; }
   canvas { display: block; width: 100%; height: 100%; background: #000; }
+  #grid {
+    position: fixed;
+    top: calc(8px + env(safe-area-inset-top, 0px));
+    left: calc(8px + env(safe-area-inset-left, 0px));
+    display: grid; gap: 0;
+    font: 14px/1 ui-monospace, Menlo, Consolas, monospace;
+    color: #fff; background: rgba(0,0,0,0.75);
+    padding: 4px; user-select: none;
+  }
+  #grid span { width: 1.2em; height: 1.2em; display: grid; place-items: center; cursor: pointer; color: #666; }
+  #grid span.v1, #grid span.v3 { color: #fff; }
+  #grid span.v3, #grid span.v4 { background: #222; }
+  #grid span.v2 { cursor: default; color: #000; background: #fff; }
+  #grid span:hover:not(.v2) { outline: 1px solid #fff; }
 </style>
 </head>
 <body>
 <canvas id="view"></canvas>
+<div id="grid"></div>
 <script>
+// 0 = empty, 1 = wall, 2 = player
+// 3 = seen wall, 4 = seen empty (set automatically: the cone in front of the player)
 const map = [
   [1,1,1,1,1,1,1,1,1,1,1,1],
   [1,0,0,0,0,0,1,0,0,0,0,1],
@@ -25,8 +42,8 @@ const map = [
   [1,1,1,1,1,1,1,1,1,1,1,1],
 ];
 
-const VIEW_DIST = 5;   
-const FOV = 0.66;      
+const VIEW_DIST = 5;   // how far the cone reaches, in tiles
+const FOV = 0.66;      // cone width (0.66 is about 66 degrees)
 
 // measure the grid
 const H = map.length;
@@ -38,7 +55,7 @@ for (let y = 0; y < H; y++)
   for (let x = 0; x < W; x++)
     if (map[y][x] === 2) { px = x; py = y; }
 
-
+// 8 facings, 45 degrees apart: N, NE, E, SE, S, SW, W, NW
 const DIRS = [[0,-1],[1,-1],[1,0],[1,1],[0,1],[-1,1],[-1,0],[-1,-1]];
 let dir = 0;
 
@@ -51,7 +68,7 @@ function isOpen(x, y) {
   return c === 0 || c === 4;
 }
 
-
+// unit-length facing vector and its sideways plane
 function facing() {
   const [dx, dy] = DIRS[dir];
   const len = Math.hypot(dx, dy);
@@ -59,7 +76,7 @@ function facing() {
   return { fx, fy, planeX: -fy * FOV, planeY: fx * FOV };
 }
 
-
+// walk one ray through the grid; calls visit(x, y) on each tile, stops when visit returns true
 function castRay(rx, ry, maxDist, visit) {
   const ox = px + 0.5, oy = py + 0.5;
   let mx = px, my = py;
@@ -78,7 +95,7 @@ function castRay(rx, ry, maxDist, visit) {
   return null;
 }
 
-  
+// put 3/4 back to 1/0, then sweep rays across the cone and mark what they reach
 function updateView() {
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++) {
@@ -114,7 +131,7 @@ function render() {
   for (let col = 0; col < cw; col++) {
     const cam = 2 * col / cw - 1;
     const rx = fx + planeX * cam, ry = fy + planeY * cam;
-    
+    // only walls marked 3 get drawn; a plain 1 stops the ray but stays hidden
     let seen = false;
     const hit = castRay(rx, ry, Infinity, (x, y) => {
       const c = cell(x, y);
@@ -128,14 +145,44 @@ function render() {
   }
 }
 
+// live number grid; click a number to swap it with its other variant (2 can't change)
+const gridEl = document.getElementById('grid');
+gridEl.style.gridTemplateColumns = `repeat(${W}, auto)`;
+const SWAP = { 0: 1, 1: 0, 3: 4, 4: 3 };
+
+function drawGrid() {
+  let html = '';
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++)
+      html += `<span class="v${map[y][x]}" data-x="${x}" data-y="${y}">${map[y][x]}</span>`;
+  gridEl.innerHTML = html;
+}
+
+gridEl.addEventListener('click', e => {
+  const t = e.target.closest('span');
+  if (!t) return;
+  const x = +t.dataset.x, y = +t.dataset.y;
+  const c = map[y][x];
+  if (!(c in SWAP)) return;
+  map[y][x] = SWAP[c];
+  update();
+});
+
+function update() {
+  updateView();
+  render();
+  drawGrid();
+}
+
 window.addEventListener('keydown', e => {
+  if (e.key === 'm' || e.key === 'M') { gridEl.hidden = !gridEl.hidden; return; }
   if (e.key === 'ArrowLeft')  dir = (dir + 7) % 8;
   else if (e.key === 'ArrowRight') dir = (dir + 1) % 8;
   else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
     const s = e.key === 'ArrowUp' ? 1 : -1;
     const dx = DIRS[dir][0] * s, dy = DIRS[dir][1] * s;
     const nx = px + dx, ny = py + dy;
-   
+    // diagonal steps can't squeeze between two walls touching at a corner
     const diagonalBlocked = dx !== 0 && dy !== 0 && !isOpen(px + dx, py) && !isOpen(px, py + dy);
     if (isOpen(nx, ny) && !diagonalBlocked) {
       map[py][px] = 0;
@@ -144,13 +191,11 @@ window.addEventListener('keydown', e => {
     }
   } else return;
   e.preventDefault();
-  updateView();
-  render();
+  update();
 });
 
 window.addEventListener('resize', render);
-updateView();
-render();
+update();
 </script>
 </body>
 </html>
