@@ -1,0 +1,156 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Test</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { height: 100%; margin: 0; background: #000; overflow: hidden; }
+  canvas { display: block; width: 100%; height: 100%; background: #000; }
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<script>
+const map = [
+  [1,1,1,1,1,1,1,1,1,1,1,1],
+  [1,0,0,0,0,0,1,0,0,0,0,1],
+  [1,0,1,1,0,0,1,0,1,1,0,1],
+  [1,0,1,0,0,0,0,0,0,1,0,1],
+  [1,0,0,0,1,1,1,1,0,0,0,1],
+  [1,1,0,0,0,0,2,0,0,0,1,1],
+  [1,0,0,1,0,0,0,0,1,0,0,1],
+  [1,0,1,1,0,1,1,0,1,1,0,1],
+  [1,0,0,0,0,0,0,0,0,0,0,1],
+  [1,1,1,1,1,1,1,1,1,1,1,1],
+];
+
+const VIEW_DIST = 5;   
+const FOV = 0.66;      
+
+// measure the grid
+const H = map.length;
+const W = map[0].length;
+
+// find the player (2)
+let px = 0, py = 0;
+for (let y = 0; y < H; y++)
+  for (let x = 0; x < W; x++)
+    if (map[y][x] === 2) { px = x; py = y; }
+
+
+const DIRS = [[0,-1],[1,-1],[1,0],[1,1],[0,1],[-1,1],[-1,0],[-1,-1]];
+let dir = 0;
+
+function cell(x, y) {
+  return (x < 0 || y < 0 || x >= W || y >= H) ? 1 : map[y][x];
+}
+
+function isOpen(x, y) {
+  const c = cell(x, y);
+  return c === 0 || c === 4;
+}
+
+
+function facing() {
+  const [dx, dy] = DIRS[dir];
+  const len = Math.hypot(dx, dy);
+  const fx = dx / len, fy = dy / len;
+  return { fx, fy, planeX: -fy * FOV, planeY: fx * FOV };
+}
+
+
+function castRay(rx, ry, maxDist, visit) {
+  const ox = px + 0.5, oy = py + 0.5;
+  let mx = px, my = py;
+  const ddx = Math.abs(1 / rx), ddy = Math.abs(1 / ry);
+  const stepX = rx < 0 ? -1 : 1, stepY = ry < 0 ? -1 : 1;
+  let sdx = (rx < 0 ? ox - mx : mx + 1 - ox) * ddx;
+  let sdy = (ry < 0 ? oy - my : my + 1 - oy) * ddy;
+  let side = 0;
+  for (let i = 0; i < 64; i++) {
+    let dist;
+    if (sdx < sdy) { dist = sdx; sdx += ddx; mx += stepX; side = 0; }
+    else           { dist = sdy; sdy += ddy; my += stepY; side = 1; }
+    if (dist > maxDist) return null;
+    if (visit(mx, my)) return { dist, side };
+  }
+  return null;
+}
+
+  
+function updateView() {
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      if (map[y][x] === 3) map[y][x] = 1;
+      if (map[y][x] === 4) map[y][x] = 0;
+    }
+  const { fx, fy, planeX, planeY } = facing();
+  const RAYS = 200;
+  for (let i = 0; i <= RAYS; i++) {
+    const cam = 2 * i / RAYS - 1;
+    const rx = fx + planeX * cam, ry = fy + planeY * cam;
+    const len = Math.hypot(rx, ry);
+    castRay(rx, ry, VIEW_DIST / len * Math.hypot(fx, fy), (x, y) => {
+      if (x < 0 || y < 0 || x >= W || y >= H) return true;
+      const c = map[y][x];
+      if (c === 1 || c === 3) { map[y][x] = 3; return true; }
+      if (c === 0) map[y][x] = 4;
+      return false;
+    });
+  }
+}
+
+const canvas = document.getElementById('view');
+const ctx = canvas.getContext('2d');
+
+function render() {
+  const cw = canvas.width = canvas.clientWidth;
+  const ch = canvas.height = canvas.clientHeight;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, cw, ch);
+
+  const { fx, fy, planeX, planeY } = facing();
+  for (let col = 0; col < cw; col++) {
+    const cam = 2 * col / cw - 1;
+    const rx = fx + planeX * cam, ry = fy + planeY * cam;
+    
+    let seen = false;
+    const hit = castRay(rx, ry, Infinity, (x, y) => {
+      const c = cell(x, y);
+      if (c === 3) { seen = true; return true; }
+      return c === 1;
+    });
+    if (!hit || !seen) continue;
+    const h = ch / hit.dist;
+    ctx.fillStyle = hit.side === 0 ? '#fff' : '#d0d0d0';
+    ctx.fillRect(col, (ch - h) / 2, 1, h);
+  }
+}
+
+window.addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft')  dir = (dir + 7) % 8;
+  else if (e.key === 'ArrowRight') dir = (dir + 1) % 8;
+  else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+    const s = e.key === 'ArrowUp' ? 1 : -1;
+    const dx = DIRS[dir][0] * s, dy = DIRS[dir][1] * s;
+    const nx = px + dx, ny = py + dy;
+   
+    const diagonalBlocked = dx !== 0 && dy !== 0 && !isOpen(px + dx, py) && !isOpen(px, py + dy);
+    if (isOpen(nx, ny) && !diagonalBlocked) {
+      map[py][px] = 0;
+      px = nx; py = ny;
+      map[py][px] = 2;
+    }
+  } else return;
+  e.preventDefault();
+  updateView();
+  render();
+});
+
+window.addEventListener('resize', render);
+updateView();
+render();
+</script>
+</body>
+</html>
